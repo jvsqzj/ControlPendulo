@@ -28,7 +28,7 @@
 
 /* PI algorithm constants */
  #define FORCE_FACTOR   0.2  // Newtons / Volt
- #define REFERENCE      4    // Posición vertical 
+ #define REFERENCE      3    // Posición vertical 
  #define MAXINTEGRAL    4.7  // Limits the integral part to 4.7V
  #define DEB_COUNTS     2    // 5ms counts for debounce
  #define TS_FACTOR      1    // 5ms counts for Ts = 5ms
@@ -313,9 +313,9 @@ enum DebounceState ButtonSelect = WAIT;
             
                 LCD_Position(0,0);
                 LCD_PrintString("PI control v1.0 ");
-                int16 theta = ANGLE_FACTOR*yk - REFERENCE;
+                int16 theta = ANGLE_FACTOR*(yk - REFERENCE);
                 // Show the KP and KI constants in the LCD
-                sprintf(displayStr,"yk=%.3fmk=%.3f ",theta,mk);
+                sprintf(displayStr,"yk=%.3dmk=%.3f ",theta,mk);
                 LCD_Position(1,0);
                 LCD_PrintString(displayStr);
     
