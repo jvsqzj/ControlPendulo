@@ -18,15 +18,17 @@
 
 /* Global constants */
 #define PWM_MAX         499   // PWM 100% (499) with Tpwm = 500us @ 1MHz (500 counts)
-#define PWM_FACTOR      100   // 100 counts/volt with Tpwm = 500us @ 1MHz
+#define PWM_FACTOR      1   // 100 counts/volt with Tpwm = 500us @ 1MHz
 #define THETA_CHANNEL   0     // Mux input for speed feedback
+#define ANGLE_FACTOR    360 / 5 //  72 deg / volt
 #define X_CHANNEL       1     // Mux input for PI constants setting
 #define VDAC_FACTOR     62.5  // 1bit/0.016mV
 #define VDAC_MAX        300   // 4.8V max. with DVDAC 9 bits and PGA x2
 #define POT_CONST       3100  // Max. counts to 100%
 
 /* PI algorithm constants */
- #define REFERENCE      0    // Posición vertical 
+ #define FORCE_FACTOR   0.2  // Newtons / Volt
+ #define REFERENCE      4    // Posición vertical 
  #define MAXINTEGRAL    4.7  // Limits the integral part to 4.7V
  #define DEB_COUNTS     2    // 5ms counts for debounce
  #define TS_FACTOR      1    // 5ms counts for Ts = 5ms
@@ -56,9 +58,14 @@ char displayStr[20] = {'\0'};
  enum  DebounceState {WAIT, RUN, PRESS};
 
 /* PI algorithm global variables */
- float KP = 0.21;       // Proportional default constant
- float KI = 0.158;      // Integral default constant @ 5ms
+ float KP = 220;       // Proportional default constant
+ float KI = 180;      // Integral default constant @ 5ms
  volatile float ik = 0; // Integral action and memory
+ float yk = 0; 	 // theta feedback
+ float ek = 0;   // theta error
+ float mk = 0;   // total control action
+ int16 vdac = 0; // For VDAC output
+ int16 data = 0; // For ADC reading
 
 /* Interrupt prototype */
 CY_ISR_PROTO(isr_Timer_Handler);
@@ -68,16 +75,20 @@ CY_ISR(isr_Timer_Handler)
 {
 
 /* ISR PI algoritm local variables */
- float yk = 0; 	 // speed feedback
- float ek = 0;   // speed error
- float mk = 0;   // total control action
+ yk = 0; 	 // theta feedback
+ ek = 0;   // theta error
+ mk = 0;   // total control action
  int16 vdac = 0; // For VDAC output
  int16 data = 0; // For ADC reading
 
-#if (PWM_Resolution)    
- int16 pwm = 0;  // For PWM output
+#if (PWM_2_Resolution)    
+ int16 pwm = 1;  // For PWM output
 #endif
     
+    /* HBRIDGE */
+    CyPins_ClearPin(Pin_Hin1_0);
+    CyPins_ClearPin(Pin_Hin2_0);
+
     /* Debounces the switches */
     if (--debounce <= 0) {
         select_2 = select_1;
@@ -89,22 +100,26 @@ CY_ISR(isr_Timer_Handler)
         step = (step_1 && step_2);
     
         /* Signals step edge for oscilloscope sync */
-        if ( (step && idle) == true) 
+        if ( (step && idle) == true) {
             CyPins_SetPin(STEP_LED_0);
-        else 
+            CyPins_SetPin(Pin_ENA_0);
+        }
+        else {
+            CyPins_ClearPin(Pin_ENA_0);
             CyPins_ClearPin(STEP_LED_0);
+        }
         debounce = DEB_COUNTS;
     }
 
     /* Performs the PID algorithm every 5ms when in idle state */
-	if ( (--factor <= 0) && (idle == true)) {
+	if (--factor <= 0 && idle == true) {
 		factor = TS_FACTOR;
         
         // Signals the start of the PI algorithm for time compliance measurements
         CyPins_SetPin(ISR_LED_0);
 
-        // Reads speed value
-        AMux_Select(SPEED_CHANNEL);
+        // Reads angle value
+        AMux_Select(THETA_CHANNEL);
         data = ADC_Read16();
         
         /* Converts the counts to volts 1V = 1krpm */
@@ -115,7 +130,7 @@ CY_ISR(isr_Timer_Handler)
             ek = REFERENCE - yk; // Follow the reference
         } 
         else {
-            ek = 0 - yk; // Stop the motor
+            ek = 0; // Stop the motor
             ik = 0;
         }
     
@@ -127,10 +142,12 @@ CY_ISR(isr_Timer_Handler)
         mk = KP*ek + ik;
 
         /* PWM conditional use */
-#if defined CY_PWM_PWM_H
+#if defined CY_PWM_PWM_2_H
         /* Scales mk to PWM range */
-        pwm = (int16) (mk*PWM_FACTOR);
-        
+        if (mk >= 0)
+            pwm = (int16) (mk*PWM_FACTOR);
+        else
+            pwm = (int16) (-1*mk*PWM_FACTOR);
         /* Saturates the PWM value */
         if (pwm > PWM_MAX) { 
             pwm = PWM_MAX;
@@ -139,12 +156,6 @@ CY_ISR(isr_Timer_Handler)
             pwm = 0; 
         }
         
-        PWM_WriteCompare(pwm); // Outputs PWM saturated value
-#endif     
-
-        /* DVDAC conditional use */
-#if defined CY_DVDAC_DVDAC_H
-        /* Scales mk to DVDAC range */
         vdac = (int16) (mk*VDAC_FACTOR);
     
         // saturates the DVDAC value 
@@ -155,6 +166,13 @@ CY_ISR(isr_Timer_Handler)
             vdac = 0; 
         }
         DVDAC_SetValue(vdac); // Outputs DVDAC saturated value
+        if(mk >= 0){    
+            PWM_2_WriteCompare(pwm);
+            PWM_1_WriteCompare(0);
+        } else {
+            PWM_1_WriteCompare(pwm);
+            PWM_2_WriteCompare(0);
+        }
 #endif
 
         // Indicates the end of the PI algorithm
@@ -185,13 +203,16 @@ bool ButtonSync(enum DebounceState* DebounceButton, bool button) {
         case RUN: 
             *DebounceButton = PRESS;
             buttonstate = true;
+            
         break;
         
         case PRESS:    
             *DebounceButton = button? PRESS:WAIT;
         break;
     
-        default: *DebounceButton = WAIT;
+        default: 
+            *DebounceButton = WAIT;
+            
 
     } // switch
         
@@ -243,8 +264,12 @@ enum DebounceState ButtonSelect = WAIT;
 #endif
 
     /* PWM conditional use */
-#if defined CY_PWM_PWM_H    
-    PWM_Start();
+#if defined CY_PWM_PWM_2_H    
+    PWM_2_Start();
+#endif
+
+#if defined CY_PWM_PWM_1_H    
+    PWM_1_Start();
 #endif    
 
     /* DVDAC conditional use */
@@ -288,9 +313,9 @@ enum DebounceState ButtonSelect = WAIT;
             
                 LCD_Position(0,0);
                 LCD_PrintString("PI control v1.0 ");
-
+                int16 theta = ANGLE_FACTOR*yk - REFERENCE;
                 // Show the KP and KI constants in the LCD
-                sprintf(displayStr,"KP=%.3fKI=%.3f ",KP,KI);
+                sprintf(displayStr,"yk=%.3fmk=%.3f ",theta,mk);
                 LCD_Position(1,0);
                 LCD_PrintString(displayStr);
     
@@ -298,11 +323,11 @@ enum DebounceState ButtonSelect = WAIT;
                 AdjustMachine = run? ADJUST_P:IDLE;
                 
                 /* Blink LED4 every 100ms to signal IDLE state */
-                CyPins_SetPin(LED4_0);
-                CyDelay(25);
-
-                CyPins_ClearPin(LED4_0);
-                CyDelay(75);                
+//                CyPins_SetPin(LED4_0);
+//                CyDelay(25);
+//
+//                CyPins_ClearPin(LED4_0);
+//                CyDelay(75);                
                 
             break;
     
@@ -317,7 +342,7 @@ enum DebounceState ButtonSelect = WAIT;
                 AdjustMachine = run? ADJUST_I:ADJUST_P;
 
                 /* Process the proportional constant of the PI */
-                AMux_Select(POT_CHANNEL);
+                AMux_Select(X_CHANNEL);
                 pot = ADC_Read16();
                 if (pot < 0) pot = 0; else if (pot > POT_CONST) pot = POT_CONST;
                 potf =  (float) pot/POT_CONST;
@@ -325,10 +350,10 @@ enum DebounceState ButtonSelect = WAIT;
                 /* Display the KP constant new value -> old value */
                 sprintf(displayStr,"%.4f -> %.4f ",potf,KP);
                 LCD_Position(1,0);
-                LCD_PrintString(displayStr);                
+                LCD_PrintString(displayStr);
     
                 /* Save the KP value if the START/SAVE button was pressed */
-                if (save == true) { 
+                if (save == true) {
                     KP = potf;
                 }
                 
@@ -345,7 +370,7 @@ enum DebounceState ButtonSelect = WAIT;
                 AdjustMachine = run? IDLE:ADJUST_I;
 
                 /* Process the integral constant of the PI */
-                AMux_Select(POT_CHANNEL);
+                AMux_Select(X_CHANNEL);
                 pot = ADC_Read16();
                 if (pot < 0) pot = 0; else if (pot > POT_CONST) pot = POT_CONST;
               
@@ -382,9 +407,7 @@ enum DebounceState ButtonSelect = WAIT;
             if (usbcount > 1) USB_Uart_PrintLn(&usbc);
         }
 #endif
-
     } // for
-    
 } // main
 
 /* [] END OF FILE */
