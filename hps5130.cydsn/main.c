@@ -18,7 +18,7 @@
 
 /* Global constants */
 #define PWM_MAX         499   // PWM 100% (499) with Tpwm = 500us @ 1MHz (500 counts)
-#define PWM_FACTOR      1   // 100 counts/volt with Tpwm = 500us @ 1MHz
+#define PWM_FACTOR      100   // 100 counts/volt with Tpwm = 500us @ 1MHz
 #define THETA_CHANNEL   0     // Mux input for speed feedback
 #define ANGLE_FACTOR    360 / 5 //  72 deg / volt
 #define X_CHANNEL       1     // Mux input for PI constants setting
@@ -27,8 +27,8 @@
 #define POT_CONST       3100  // Max. counts to 100%
 
 /* PI algorithm constants */
- #define FORCE_FACTOR   0.2  // Newtons / Volt
- #define REFERENCE      3    // Posición vertical 
+ #define FORCE_FACTOR   2  // Newtons / Volt
+ #define REFERENCE      1.7805    // Posición vertical 
  #define MAXINTEGRAL    4.7  // Limits the integral part to 4.7V
  #define DEB_COUNTS     2    // 5ms counts for debounce
  #define TS_FACTOR      1    // 5ms counts for Ts = 5ms
@@ -58,8 +58,8 @@ char displayStr[20] = {'\0'};
  enum  DebounceState {WAIT, RUN, PRESS};
 
 /* PI algorithm global variables */
- float KP = 220;       // Proportional default constant
- float KI = 180;      // Integral default constant @ 5ms
+ float KP = 221;       // Proportional default constant
+ float KI = 5;      // Integral default constant @ 5ms
  volatile float ik = 0; // Integral action and memory
  float yk = 0; 	 // theta feedback
  float ek = 0;   // theta error
@@ -85,10 +85,6 @@ CY_ISR(isr_Timer_Handler)
  int16 pwm = 1;  // For PWM output
 #endif
     
-    /* HBRIDGE */
-    CyPins_ClearPin(Pin_Hin1_0);
-    CyPins_ClearPin(Pin_Hin2_0);
-
     /* Debounces the switches */
     if (--debounce <= 0) {
         select_2 = select_1;
