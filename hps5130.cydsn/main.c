@@ -28,7 +28,7 @@
 
 /* PI algorithm constants */
  #define FORCE_FACTOR   2  // Newtons / Volt
- #define REFERENCE      1.7805    // Posición vertical 
+ #define REFERENCE      1.64225    // Posición vertical 
  #define MAXINTEGRAL    4.7  // Limits the integral part to 4.7V
  #define DEB_COUNTS     2    // 5ms counts for debounce
  #define TS_FACTOR      1    // 5ms counts for Ts = 5ms
@@ -59,7 +59,7 @@ char displayStr[20] = {'\0'};
 
 /* PI algorithm global variables */
  float KP = 221;       // Proportional default constant
- float KI = 5;      // Integral default constant @ 5ms
+ float KI = 3;      // Integral default constant @ 5ms
  volatile float ik = 0; // Integral action and memory
  float yk = 0; 	 // theta feedback
  float ek = 0;   // theta error
